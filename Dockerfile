@@ -10,7 +10,7 @@
 # --------------------------------------------------------------------------
 # Stage 1: builder
 # --------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 # A virtualenv inside the image feels redundant -- the container is already
 # isolated. It is here because it puts every installed dependency under one
@@ -40,7 +40,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # --------------------------------------------------------------------------
 # Stage 2: runtime
 # --------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 # Build args carrying provenance. These are supplied by CI:
 #   docker build --build-arg GIT_COMMIT=$GITHUB_SHA ...
