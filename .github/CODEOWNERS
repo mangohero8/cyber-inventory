@@ -1,0 +1,63 @@
+# CODEOWNERS
+#
+# GitHub reads this file and automatically requests review from the listed
+# owners when a PR touches a matching path. Combined with branch protection's
+# "require review from Code Owners", it becomes mandatory rather than polite.
+#
+# WHY THIS MATTERS MORE THAN IT LOOKS
+#
+# Not all files carry the same risk. A change to a README and a change to the
+# deploy workflow are both "one file changed" in a PR summary, but one of them
+# can exfiltrate your cloud credentials. CODEOWNERS is how you make the risky
+# paths pull in the people who understand them, automatically, without relying
+# on anyone noticing.
+#
+# SYNTAX
+#   Same pattern rules as .gitignore.
+#   LAST matching rule wins -- ordering is significant, most general first.
+#   Owners are @user or @org/team.
+#
+# NOTE: in this practice repo every owner is the same person, which makes the
+# reviews self-approvals. In the boot camp, replace these with real teammates
+# and the mechanism starts doing actual work.
+
+# --------------------------------------------------------------------------
+# Default -- everything not matched more specifically below
+# --------------------------------------------------------------------------
+*                           @mangohero8
+
+# --------------------------------------------------------------------------
+# Application code
+# --------------------------------------------------------------------------
+/app/                       @mangohero8
+/tests/                     @mangohero8
+
+# --------------------------------------------------------------------------
+# HIGH RISK -- pipeline and infrastructure
+#
+# Anything under .github/workflows/ is code GitHub executes on its runners
+# with access to repository secrets and, in the deploy workflow, the ability
+# to mint cloud credentials. A malicious or careless change here is far more
+# dangerous than a bug in the application.
+#
+# In a real org these paths belong to a platform or security team, and that
+# separation is the point: the people who can change the pipeline should not
+# be the same set as everyone who can change a handler.
+# --------------------------------------------------------------------------
+/.github/workflows/         @mangohero8
+/.github/dependabot.yml     @mangohero8
+/.github/CODEOWNERS         @mangohero8
+/Dockerfile                 @mangohero8
+/.dockerignore              @mangohero8
+/scripts/                   @mangohero8
+
+# --------------------------------------------------------------------------
+# Dependency manifests -- where supply chain risk enters
+# --------------------------------------------------------------------------
+/requirements.txt           @mangohero8
+/requirements-dev.txt       @mangohero8
+
+# --------------------------------------------------------------------------
+# Cross-platform behaviour -- easy to change, breaks everyone on the other OS
+# --------------------------------------------------------------------------
+/.gitattributes             @mangohero8
