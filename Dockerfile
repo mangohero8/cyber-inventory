@@ -87,6 +87,19 @@ LABEL org.opencontainers.image.title="cyber-inventory" \
 RUN groupadd --system --gid 1001 appuser \
     && useradd --system --uid 1001 --gid appuser --no-create-home appuser
 
+# Remove pip, setuptools, and wheel from the SYSTEM site-packages.
+# The base image ships a second copy, separate from our virtualenv -- which
+# is why cleaning only the venv left the identical two findings behind.
+# Path is resolved at build time so a base image bump cannot silently turn
+# this into a no-op.
+RUN SITE="$(/usr/local/bin/python3.11 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
+    && echo "cleaning build tooling from ${SITE}" \
+    && rm -rf "${SITE}/pip" "${SITE}"/pip-* \
+              "${SITE}/setuptools" "${SITE}"/setuptools-* \
+              "${SITE}/wheel" "${SITE}"/wheel-* \
+              "${SITE}/pkg_resources" \
+    && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.11
+
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
