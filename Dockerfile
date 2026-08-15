@@ -34,7 +34,8 @@ WORKDIR /build
 # reinstalls every package -- turning a 5-second build into a 2-minute one, on
 # every commit, for the life of the project.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y wheel setuptools pip
 
 # --------------------------------------------------------------------------
 # Stage 2: runtime

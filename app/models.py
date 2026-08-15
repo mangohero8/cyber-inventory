@@ -8,7 +8,7 @@ produce interesting validation failures and meaningful test cases.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from ipaddress import ip_address
 from typing import Annotated
 from uuid import uuid4
@@ -16,7 +16,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 
-class Criticality(str, Enum):
+class Criticality(StrEnum):
     """How much it matters if this asset is compromised."""
 
     LOW = "low"
@@ -25,7 +25,7 @@ class Criticality(str, Enum):
     CRITICAL = "critical"
 
 
-class AssetType(str, Enum):
+class AssetType(StrEnum):
     SERVER = "server"
     WORKSTATION = "workstation"
     NETWORK_DEVICE = "network_device"
