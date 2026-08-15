@@ -170,7 +170,7 @@ jobs:
         # Verified against Aqua's advisory and independent analysis from
         # StepSecurity and Socket. Do not "upgrade" this without checking
         # whether the newer tag is trustworthy.
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
         with:
           image-ref: cyber-inventory:ci
           format: table
@@ -183,7 +183,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan filesystem for secrets and dependency CVEs
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
         with:
           scan-type: fs
           scan-ref: .
