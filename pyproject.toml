@@ -1,0 +1,68 @@
+[project]
+name = "cyber-inventory"
+version = "0.1.0"
+description = "Asset inventory service with commit-to-production traceability"
+requires-python = ">=3.11"
+
+# --------------------------------------------------------------------------
+# pytest
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Without this, `pytest` fails with "No module named 'app'" because the
+# project root is not on the import path. The alternative is installing the
+# package in editable mode; this is one line and works identically in CI.
+pythonpath = ["."]
+# -q keeps CI logs readable; --strict-markers turns a typo'd @pytest.mark
+# into an error instead of a silently ignored decorator.
+addopts = "-q --strict-markers --strict-config"
+
+# --------------------------------------------------------------------------
+# coverage
+# --------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+# A threshold is a floor, not a goal. 85 is high enough to catch an
+# entirely untested new module and low enough that nobody games it by
+# writing assertion-free tests.
+fail_under = 85
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+# --------------------------------------------------------------------------
+# ruff -- linter and formatter in one tool
+# --------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes -- real bugs: unused names, undefined vars
+    "I",   # import sorting
+    "B",   # bugbear -- likely-wrong patterns
+    "UP",  # pyupgrade -- modern syntax
+    "S",   # bandit -- security issues
+]
+ignore = [
+    "S104",  # binding 0.0.0.0 is required inside a container
+    # B008 forbids function calls in argument defaults -- normally excellent
+    # advice, because a mutable default is evaluated once and shared. But
+    # `Depends()` in a default IS the FastAPI dependency-injection idiom and
+    # the framework handles it correctly. Suppressed with a reason, not
+    # silently: a rule you disable without explaining is a rule the next
+    # person will re-enable.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# assert is the entire point of a test file; bandit flags it by default.
+"tests/*" = ["S101"]

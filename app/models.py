@@ -7,7 +7,7 @@ produce interesting validation failures and meaningful test cases.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from ipaddress import ip_address
 from typing import Annotated
@@ -95,10 +95,10 @@ class Asset(AssetCreate):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     first_seen: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(UTC)
     )
     last_seen: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(UTC)
     )
 
 

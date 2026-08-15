@@ -16,7 +16,7 @@ answers it in one HTTP call instead of an afternoon of guessing.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 # "unknown" is a deliberate default. If you ever see it in a deployed
 # environment, the build did not inject provenance and your traceability

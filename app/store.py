@@ -13,7 +13,7 @@ expect to change.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models import Asset, AssetCreate, AssetUpdate
 
@@ -84,7 +84,7 @@ class AssetStore:
 
             changes = payload.model_dump(exclude_unset=True, exclude_none=True)
             updated = existing.model_copy(
-                update={**changes, "last_seen": datetime.now(timezone.utc)}
+                update={**changes, "last_seen": datetime.now(UTC)}
             )
             self._assets[asset_id] = updated
             return updated
