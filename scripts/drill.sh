@@ -293,18 +293,39 @@ ROOT CAUSE
   reports this. Ever.
 
 HOW TO FIND IT
-  1. CI is GREEN -- including the step that runs the container and curls it.
-     That is information: CI published 8080 and the app was reachable on
-     8080 there. Whatever differs is something CI does not control.
-  2. The deploy fails and the revision never becomes ready.
-  3. Read the revision logs:
-       gcloud run services logs read cyber-inventory --region=us-central1
-     The app logs "Uvicorn running on http://0.0.0.0:8000" -- the process
-     started FINE. This is not a crash. It is listening in the wrong place.
-  4. Compare against what the platform expects:
-       grep -n "port=" .github/workflows/deploy.yml     -> 8080
-       git diff main -- Dockerfile                      -> 8000
-     Two numbers that must agree, in two files, changed independently.
+  CI catches this one, at "Verify build provenance":
+
+      ##[error]container never became healthy
+      INFO:     Started server process [1]
+      INFO:     Application startup complete.
+      INFO:     Uvicorn running on http://0.0.0.0:8000
+
+  Read those four lines carefully, because they are not what a crash looks
+  like. The process started. Startup completed. There is no traceback. The
+  ONLY anomaly is the port number in the last line -- and you only notice it
+  is anomalous if you know what it should be.
+
+  That is the skill: a log that says everything succeeded, and one field in
+  it that disagrees with the rest of the system.
+
+  Then confirm the mismatch -- two numbers, two files, changed apart:
+      grep -n "port=" .github/workflows/deploy.yml     -> 8080
+      git diff main -- Dockerfile                      -> 8000
+
+  IF IT REACHES PRODUCTION INSTEAD (weaker CI, or the CI probe published
+  8000 too), the symptom moves one stage later: the deploy fails, the
+  revision never becomes ready, and the same line appears in
+      gcloud run services logs read cyber-inventory --region=us-central1
+
+WHY CI CATCHES IT
+  Because CI starts the REAL container and talks to it over HTTP, rather
+  than only running unit tests. Unit tests never bind a port, so a
+  pytest-only pipeline sails straight past this entire class of packaging
+  bug. That step was added to verify provenance; catching runtime packaging
+  errors is a second job it does for free.
+
+  Worth generalising: the closer your pipeline gets to running the actual
+  artifact the actual way, the more classes of failure it can catch.
 
 FIX
   CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
