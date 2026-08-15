@@ -122,15 +122,21 @@ PY
       ;;
 
     3)
-      # Hardcode the port. Works locally because 8080 is what you publish;
-      # fails wherever the platform chooses a different port.
+      # Hardcode a port that does NOT match what the platform routes to.
+      #
+      # NOTE: an earlier version of this drill hardcoded 8080 -- which is
+      # exactly what deploy.yml passes via --port, so nothing broke. The bug
+      # was real (a hardcoded port, and no `exec` so SIGTERM is swallowed)
+      # but it was LATENT: correct by coincidence. Using 8000 makes the
+      # mismatch actual, which is what happens the day someone changes the
+      # service port in one place and not the other.
       py <<'PY'
 import pathlib
 p = pathlib.Path("Dockerfile"); s = p.read_text()
-s = s.replace(
-    'CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]',
-    'CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]', 1)
-p.write_text(s)
+old = 'CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]'
+new = 'CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]'
+assert old in s, "drill 3 anchor missing -- Dockerfile already modified?"
+p.write_text(s.replace(old, new, 1))
 PY
       msg="build: simplify container start command"
       ;;
@@ -277,28 +283,56 @@ EOF
 DRILL 3 -- Container runs locally, dies on Cloud Run
 
 ROOT CAUSE
-  CMD hardcodes --port 8080 instead of reading $PORT. Cloud Run injects PORT
-  and expects the container to listen on it. It also no longer uses `exec`,
-  so uvicorn is a child of the shell and never receives SIGTERM.
+  CMD hardcodes --port 8000 instead of reading $PORT. deploy.yml routes
+  traffic to --port=8080. The container starts perfectly and listens on a
+  port nothing is sending traffic to, so the revision never becomes ready.
+
+  Secondary, and invisible: `exec` was dropped, so uvicorn runs as a child
+  of the shell and never receives SIGTERM. The container is force-killed at
+  the end of the grace period and in-flight requests are dropped. Nothing
+  reports this. Ever.
 
 HOW TO FIND IT
-  1. `docker run -p 8080:8080` works locally -- because YOU chose 8080.
-  2. The revision never becomes ready. Cloud Run waits for the container to
-     listen on the port it assigned, times out, and rolls back.
-  3. Check the revision logs:
+  1. CI is GREEN -- including the step that runs the container and curls it.
+     That is information: CI published 8080 and the app was reachable on
+     8080 there. Whatever differs is something CI does not control.
+  2. The deploy fails and the revision never becomes ready.
+  3. Read the revision logs:
        gcloud run services logs read cyber-inventory --region=us-central1
-     The app logs "Uvicorn running on 0.0.0.0:8080" -- proving the process
-     started fine. It is listening on the WRONG port, not failing to start.
-  4. `git diff main -- Dockerfile` shows $PORT was removed.
+     The app logs "Uvicorn running on http://0.0.0.0:8000" -- the process
+     started FINE. This is not a crash. It is listening in the wrong place.
+  4. Compare against what the platform expects:
+       grep -n "port=" .github/workflows/deploy.yml     -> 8080
+       git diff main -- Dockerfile                      -> 8000
+     Two numbers that must agree, in two files, changed independently.
 
 FIX
   CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+
+  Read $PORT rather than matching the number by hand. One source of truth
+  beats two that agree today.
 
 LESSON
   "Works locally" is weakest exactly where the platform supplies something
   you supplied yourself locally: ports, credentials, DNS, filesystem layout.
   When a container is healthy locally and dead on the platform, enumerate
   what the platform provides that you hardcoded.
+
+  Second lesson, from how this drill was originally written WRONG: the first
+  version hardcoded 8080, which is what deploy.yml already routes to. The bug
+  was real -- hardcoded port, no exec -- but it was correct BY COINCIDENCE,
+  so nothing failed.
+
+  That is a latent bug: wrong code that works until an unrelated change makes
+  it matter. They are the most expensive kind, because they are introduced
+  calmly during a refactor and surface months later during something urgent.
+  The `exec` half of this drill is still latent even now -- no test catches
+  it, and you would only ever notice it as mysterious dropped requests during
+  deploys.
+
+  This is also why "the test passed" is not the same as "the test tested
+  something". A drill that cannot fail is worth exactly as much as a test
+  that asserts nothing.
 
 EOF
     ;;
