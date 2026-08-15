@@ -122,4 +122,4 @@ EXPOSE 8080
 # shutdown signals and gets force-killed after the grace period, dropping any
 # in-flight requests. Here sh is used deliberately to expand $PORT, with exec
 # to replace the shell so uvicorn becomes PID 1 and receives signals directly.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
