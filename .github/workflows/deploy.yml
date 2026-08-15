@@ -1,0 +1,186 @@
+name: Deploy
+
+# Deploys to Cloud Run on every push to main, after CI has passed.
+#
+# Separate workflow from ci.yml on purpose: CI runs on pull requests from
+# anywhere and must never hold deploy credentials. This workflow runs only on
+# main, and is the only place `id-token: write` appears.
+
+on:
+  push:
+    branches: [main]
+  # Manual trigger, for redeploying without an empty commit.
+  workflow_dispatch:
+
+# Never run two deploys at once. Without this, two quick merges race and the
+# older image can land last -- production ends up running the wrong commit,
+# which is a genuinely confusing incident to debug.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false   # let an in-flight deploy finish, don't kill it
+
+permissions:
+  contents: read
+  # THIS is what makes keyless auth work. It lets the job request a
+  # short-lived OIDC token from GitHub proving which repo and ref it is.
+  # Google validates that token instead of accepting a stored key.
+  id-token: write
+
+jobs:
+  deploy:
+    name: Build, push, deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+        with:
+          # No credentials_json. No key file. GitHub proves its identity with
+          # an OIDC token and receives an access token valid for minutes.
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          BASE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/cyber-inventory"
+          # Tag with the full commit SHA, not just :latest.
+          #
+          # :latest is ambiguous -- it means "whatever was pushed most
+          # recently", which is useless during an incident and impossible to
+          # roll back to deterministically. The SHA tag means every image in
+          # the registry is permanently identifiable, and rolling back is
+          # deploying a specific earlier tag.
+          echo "sha_tag=${BASE}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${BASE}:latest" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355  # v6.10.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.sha_tag }}
+            ${{ steps.tags.outputs.latest_tag }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.tags.outputs.build_time }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: |
+          set -euo pipefail
+          gcloud run deploy cyber-inventory \
+            --image="${{ steps.tags.outputs.sha_tag }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --service-account="${{ vars.GCP_RUNTIME_SA }}" \
+            --set-env-vars="ENVIRONMENT=production" \
+            --port=8080 \
+            --cpu=1 \
+            --memory=512Mi \
+            --min-instances=0 \
+            --max-instances=3 \
+            --timeout=30s \
+            --quiet
+
+          URL="$(gcloud run services describe cyber-inventory \
+                  --region="${{ vars.GCP_REGION }}" --format='value(status.url)')"
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "deployed to ${URL}"
+
+      # ------------------------------------------------------------------
+      # THE PRODUCTION SMOKE TEST.
+      #
+      # "The deploy command exited 0" is not the same as "the new version is
+      # serving traffic". This asks the live service what commit it is and
+      # fails the workflow if the answer is anything other than the commit we
+      # just deployed.
+      #
+      # This closes the loop the whole project is built around:
+      #   commit -> build -> deploy -> PRODUCTION, verified end to end.
+      # ------------------------------------------------------------------
+      - name: Smoke test the live service
+        run: |
+          set -euo pipefail
+          URL="${{ steps.deploy.outputs.url }}"
+
+          echo "--- waiting for the new revision to serve ---"
+          for i in $(seq 1 30); do
+            if curl -sf "${URL}/healthz" >/dev/null 2>&1; then
+              echo "healthy after ${i}s"
+              break
+            fi
+            [ "$i" -eq 30 ] && { echo "::error::service never became healthy"; exit 1; }
+            sleep 2
+          done
+
+          echo "--- readiness ---"
+          curl -sf "${URL}/readyz" | tee readyz.json
+          echo ""
+
+          echo "--- version ---"
+          curl -sf "${URL}/version" | tee version.json
+          echo ""
+
+          LIVE_COMMIT="$(python3 -c "import json;print(json.load(open('version.json'))['commit'])")"
+          echo "live in production: ${LIVE_COMMIT}"
+          echo "expected:           ${{ github.sha }}"
+
+          if [ "${LIVE_COMMIT}" = "unknown" ]; then
+            echo "::error::production reports no build provenance"
+            exit 1
+          fi
+
+          if [ "${LIVE_COMMIT}" != "${{ github.sha }}" ]; then
+            echo "::error::production is serving ${LIVE_COMMIT}, expected ${{ github.sha }}"
+            echo "::error::the deploy reported success but old code is still serving"
+            exit 1
+          fi
+
+          echo "--- functional check ---"
+          curl -sf -X POST "${URL}/api/v1/assets" \
+            -H 'Content-Type: application/json' \
+            -d '{"hostname":"smoke-test-01","ip_address":"10.0.0.1","asset_type":"server","owner":"ci","criticality":"low"}' \
+            -o /dev/null -w 'create: HTTP %{http_code}\n'
+
+          curl -sf "${URL}/api/v1/stats" | tee stats.json
+          echo ""
+          echo "PRODUCTION VERIFIED: serving ${{ github.sha }}"
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### Deployment"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | ${{ steps.deploy.outputs.url }} |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Image | \`${{ steps.tags.outputs.sha_tag }}\` |"
+            echo ""
+            echo "Roll back by deploying an earlier SHA tag:"
+            echo '```'
+            echo "gcloud run deploy cyber-inventory --image=<earlier-sha-tag> --region=${{ vars.GCP_REGION }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
