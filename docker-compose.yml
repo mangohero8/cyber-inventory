@@ -1,0 +1,28 @@
+# Local convenience only. Cloud Run does not use this file.
+#
+# It exists so `docker compose up` reproduces the production container with
+# one command, including passing provenance in the same way CI does.
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        # Supplied from your shell so the local container carries real
+        # provenance too:
+        #   GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    ports:
+      - "8080:8080"
+    environment:
+      ENVIRONMENT: docker
+    healthcheck:
+      # Compose can report the container as healthy or unhealthy, which is a
+      # useful local rehearsal of what Cloud Run does with the same endpoint.
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

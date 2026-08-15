@@ -1,0 +1,43 @@
+# Everything here is excluded from the build context -- the set of files
+# Docker uploads to the build engine before running the Dockerfile.
+#
+# Two reasons this file matters:
+#
+# 1. Speed. Without it, the entire directory ships to the daemon on every
+#    build, including .venv and .git. That is tens of megabytes of pointless
+#    copying per build.
+#
+# 2. Security. Anything in the build context can end up in the image, and
+#    files added in one layer remain recoverable in image history even if a
+#    later layer deletes them. A leaked .env is permanent.
+
+.git
+.gitignore
+.github
+
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+tests
+
+# Secrets. Never in an image.
+.env
+*.pem
+*.key
+credentials.json
+service-account*.json
+
+README.md
+GLOSSARY.md
+docs
+Makefile
+docker-compose.yml
+.DS_Store
