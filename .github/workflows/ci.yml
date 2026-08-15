@@ -1,0 +1,193 @@
+name: CI
+
+# --------------------------------------------------------------------------
+# WHY EVERY ACTION BELOW IS PINNED TO A COMMIT SHA
+#
+# A tag like `v4` is a label, and labels move. Whoever controls the action's
+# repository can re-point a tag at different code, and your next workflow run
+# executes that new code -- on your runner, with access to your secrets, with
+# no change to this file and no notification.
+#
+# That is not hypothetical. In March 2026 attackers compromised
+# aquasecurity/trivy-action and force-pushed 76 of its 77 version tags to
+# malicious commits. The injected code read the runner's environment AND the
+# Runner.Worker process memory to harvest secrets marked sensitive, then
+# exfiltrated them to a typosquatted domain. Every pipeline that ran a
+# compromised tag had to treat all reachable credentials as stolen.
+#
+# A commit SHA cannot be moved. It is the only immutable way to reference an
+# action, and it is what GitHub's own hardening guide recommends.
+#
+# The tradeoff is real: SHAs are unreadable and do not auto-update, so you
+# stop getting patches silently. Keep the human-readable version in a trailing
+# comment and let Dependabot propose bumps -- then a version change arrives as
+# a reviewable pull request instead of arriving invisibly.
+# --------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege. The default token is broader than this workflow needs, and
+# anything running inside the job inherits whatever the token can do.
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ------------------------------------------------------------------------
+  # Job 1: code quality. Fast, so it fails fast.
+  # ------------------------------------------------------------------------
+  quality:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        # --output-format=github annotates the offending lines directly in the
+        # PR diff instead of burying them in a log nobody opens.
+        run: ruff check --output-format=github .
+
+      - name: Run tests with coverage
+        run: pytest --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+        # Keep the report even when tests fail -- that is exactly the run you
+        # want to inspect.
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
+
+  # ------------------------------------------------------------------------
+  # Job 2: container build, provenance verification, vulnerability scan.
+  # ------------------------------------------------------------------------
+  container:
+    name: Build and scan image
+    runs-on: ubuntu-latest
+    needs: quality  # don't waste a build on code that failed its tests
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349  # v3.7.1
+
+      - name: Record build timestamp
+        id: meta
+        run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355  # v6.10.0
+        with:
+          context: .
+          push: false            # CI proves it builds; CD pushes it
+          load: true             # load into the local daemon so we can run it
+          tags: cyber-inventory:ci
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ------------------------------------------------------------------
+      # THE TRACEABILITY TEST.
+      #
+      # Start the image we just built, ask it what commit it is, and assert
+      # the answer equals the commit that triggered this workflow.
+      #
+      # This is the commit-to-production chain, verified automatically. Without
+      # it, provenance can break silently -- a renamed build arg, a dropped ENV
+      # -- and nothing else in the pipeline would notice, until the day you are
+      # mid-incident and /version says "unknown".
+      # ------------------------------------------------------------------
+      - name: Verify build provenance
+        run: |
+          set -euo pipefail
+          docker run -d --name probe -p 8080:8080 cyber-inventory:ci
+
+          # Poll rather than `sleep 10`. A fixed sleep is either too short
+          # (flaky) or too long (slow), and is never right on both the fastest
+          # and the slowest runner.
+          for i in $(seq 1 30); do
+            if curl -sf localhost:8080/healthz >/dev/null 2>&1; then
+              echo "container is up after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "::error::container never became healthy"
+              docker logs probe
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "--- /version ---"
+          curl -sf localhost:8080/version | tee version.json
+          echo ""
+
+          REPORTED=$(python3 -c "import json;print(json.load(open('version.json'))['commit'])")
+          echo "reported: $REPORTED"
+          echo "expected: ${{ github.sha }}"
+
+          if [ "$REPORTED" != "${{ github.sha }}" ]; then
+            echo "::error::provenance mismatch -- the traceability chain is broken"
+            exit 1
+          fi
+          echo "provenance verified"
+
+          docker rm -f probe
+
+      - name: Scan image for vulnerabilities
+        # PINNED TO THE ONLY TAG THAT SURVIVED THE MARCH 2026 COMPROMISE.
+        # 0.35.0 -> 57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        # Verified against Aqua's advisory and independent analysis from
+        # StepSecurity and Socket. Do not "upgrade" this without checking
+        # whether the newer tag is trustworthy.
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          image-ref: cyber-inventory:ci
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          # Only flag what you can act on. A CVE with no available patch cannot
+          # be fixed by this repo, and a scanner that reports unfixable
+          # findings every run trains people to ignore it -- which costs you
+          # the real findings too.
+          ignore-unfixed: true
+
+      - name: Scan filesystem for secrets and dependency CVEs
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret

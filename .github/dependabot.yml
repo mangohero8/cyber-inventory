@@ -1,0 +1,42 @@
+# Dependabot exists here to solve the problem that SHA pinning creates.
+#
+# Pinning actions to commit SHAs stops silent updates -- good, that is the
+# point -- but it also means you stop receiving security patches unless
+# somebody remembers to look. Dependabot watches upstream and opens a pull
+# request when a pinned action or dependency moves.
+#
+# The result is the combination you actually want: nothing changes without
+# your approval, and you still find out when something has changed.
+#
+# Dependabot understands SHA pins with a trailing version comment and updates
+# both together, which is why the workflow file is written that way.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Group routine bumps into one PR so the queue stays reviewable.
+      # Security updates still arrive separately and immediately.
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
