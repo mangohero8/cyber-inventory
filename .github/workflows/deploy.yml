@@ -82,6 +82,7 @@ jobs:
           push: true
           tags: |
             ${{ steps.tags.outputs.sha_tag }}
+            ${{ steps.tags.outputs.latest_tag }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             BUILD_TIME=${{ steps.tags.outputs.build_time }}
@@ -93,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           gcloud run deploy cyber-inventory \
-            --image="${{ steps.tags.outputs.latest_tag }}" \
+            --image="${{ steps.tags.outputs.sha_tag }}" \
             --region="${{ vars.GCP_REGION }}" \
             --platform=managed \
             --allow-unauthenticated \
