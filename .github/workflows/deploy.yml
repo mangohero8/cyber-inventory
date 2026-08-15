@@ -94,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           gcloud run deploy cyber-inventory \
-            --image="${{ steps.tags.outputs.latest_tag }}" \
+            --image="${{ steps.tags.outputs.sha_tag }}" \
             --region="${{ vars.GCP_REGION }}" \
             --platform=managed \
             --allow-unauthenticated \

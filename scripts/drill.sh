@@ -152,17 +152,37 @@ PY
       ;;
 
     5)
-      # Deploy the :latest tag instead of the commit-specific one. Whatever
-      # was pushed most recently wins, which is not necessarily this commit.
+      # Deploy :latest, AND stop publishing :latest during the build.
+      #
+      # Both halves are required. An earlier version changed only the deploy
+      # step -- but the build pushes both tags at the same instant, pointing
+      # at the same image, so deploying :latest deployed exactly the right
+      # thing. Correct by coincidence, and the drill taught nothing.
+      #
+      # Removing :latest from the build makes it point at whatever was pushed
+      # LAST TIME. Production then serves the previous commit, which is the
+      # real-world scenario: someone tidies up the tag list and misses that
+      # the deploy step still references it.
       py <<'PY'
 import pathlib
 p = pathlib.Path(".github/workflows/deploy.yml"); s = p.read_text()
-s = s.replace(
-    '--image="${{ steps.tags.outputs.sha_tag }}"',
-    '--image="${{ steps.tags.outputs.latest_tag }}"', 1)
+
+old_deploy = '--image="${{ steps.tags.outputs.sha_tag }}"'
+new_deploy = '--image="${{ steps.tags.outputs.latest_tag }}"'
+assert old_deploy in s, "drill 5 deploy anchor missing"
+s = s.replace(old_deploy, new_deploy, 1)
+
+old_tags = """          tags: |
+            ${{ steps.tags.outputs.sha_tag }}
+            ${{ steps.tags.outputs.latest_tag }}"""
+new_tags = """          tags: |
+            ${{ steps.tags.outputs.sha_tag }}"""
+assert old_tags in s, "drill 5 tag-push anchor missing"
+s = s.replace(old_tags, new_tags, 1)
+
 p.write_text(s)
 PY
-      msg="ci: deploy latest tag"
+      msg="ci: tidy up image tagging"
       ;;
 
     6)
