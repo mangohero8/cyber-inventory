@@ -92,7 +92,7 @@ RUN groupadd --system --gid 1001 appuser \
 # is why cleaning only the venv left the identical two findings behind.
 # Path is resolved at build time so a base image bump cannot silently turn
 # this into a no-op.
-RUN SITE="$(/usr/local/bin/python3.11 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
+RUN SITE="$(/usr/local/bin/python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
     && echo "cleaning build tooling from ${SITE}" \
     && rm -rf "${SITE}/pip" "${SITE}"/pip-* \
               "${SITE}/setuptools" "${SITE}"/setuptools-* \
@@ -122,4 +122,4 @@ EXPOSE 8080
 # shutdown signals and gets force-killed after the grace period, dropping any
 # in-flight requests. Here sh is used deliberately to expand $PORT, with exec
 # to replace the shell so uvicorn becomes PID 1 and receives signals directly.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
