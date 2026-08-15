@@ -131,7 +131,7 @@ jobs:
 
           echo "--- waiting for the new revision to serve ---"
           for i in $(seq 1 30); do
-            if curl -sf "${URL}/healthz" >/dev/null 2>&1; then
+            if curl -sf "${URL}/health" >/dev/null 2>&1; then
               echo "healthy after ${i}s"
               break
             fi
@@ -140,7 +140,7 @@ jobs:
           done
 
           echo "--- readiness ---"
-          curl -sf "${URL}/readyz" | tee readyz.json
+          curl -sf "${URL}/ready" | tee ready.json
           echo ""
 
           echo "--- version ---"

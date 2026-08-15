@@ -138,8 +138,13 @@ async def request_context(request: Request, call_next):
 # --------------------------------------------------------------------------
 
 
-@app.get("/healthz", response_model=HealthStatus, tags=["ops"])
-def healthz() -> HealthStatus:
+# Cloud Run's frontend RESERVES paths ending in "z" and 404s them before
+# they reach the container. /healthz is the Kubernetes convention, so it
+# stays registered as an alias -- it works locally, in Docker and on GKE.
+@app.get("/health", response_model=HealthStatus, tags=["ops"])
+@app.get("/healthz", response_model=HealthStatus, tags=["ops"],
+         include_in_schema=False)
+def health() -> HealthStatus:
     """Liveness: is the process up and able to respond at all?
 
     Deliberately checks nothing external. A liveness probe that depends on a
@@ -149,8 +154,10 @@ def healthz() -> HealthStatus:
     return HealthStatus(status="ok", checks={"process": "ok"})
 
 
-@app.get("/readyz", response_model=HealthStatus, tags=["ops"])
-def readyz(store: AssetStore = Depends(get_store)) -> HealthStatus:
+@app.get("/ready", response_model=HealthStatus, tags=["ops"])
+@app.get("/readyz", response_model=HealthStatus, tags=["ops"],
+         include_in_schema=False)
+def ready(store: AssetStore = Depends(get_store)) -> HealthStatus:
     """Readiness: should this instance receive traffic right now?
 
     This is where dependency checks belong. Today the only dependency is the
