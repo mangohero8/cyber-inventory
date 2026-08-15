@@ -1,0 +1,79 @@
+# CROSS-PLATFORM LINE ENDINGS
+#
+# This is the single most important file in a mixed macOS/Windows repository,
+# and it has to exist BEFORE the first Windows clone.
+#
+# THE PROBLEM
+#
+# Windows uses CRLF (\r\n) line endings; macOS, Linux, and every container
+# use LF (\n). Git on Windows defaults to converting LF to CRLF on checkout.
+# That is harmless for Python source -- but it is catastrophic for anything
+# executed by a shell.
+#
+# A shell script with CRLF line endings fails inside a Linux container with:
+#
+#     /bin/sh^M: bad interpreter: No such file or directory
+#     bash\r: command not found
+#
+# The `^M` is the stray carriage return. The error names a file that plainly
+# exists, which sends people hunting for missing packages and broken paths
+# for an hour. It is one of the most confusing errors in cross-platform work
+# and it is entirely preventable by this file.
+#
+# `* text=auto` lets Git normalize text files to LF in the repository while
+# still checking out CRLF on Windows where that is appropriate. The explicit
+# `eol=lf` rules below force LF on disk everywhere, for the files where CRLF
+# would break execution.
+
+* text=auto
+
+# --------------------------------------------------------------------------
+# MUST be LF everywhere -- these are executed by a shell, in a container, or
+# by a Linux CI runner
+# --------------------------------------------------------------------------
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.dockerfile    text eol=lf
+Makefile        text eol=lf
+*.mk            text eol=lf
+.dockerignore   text eol=lf
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+
+# YAML is parsed by tools that mostly tolerate CRLF, but block scalars (the
+# `run: |` steps in a workflow) carry their line endings into the shell --
+# so a CRLF workflow file produces the same `\r` failures inside a run step.
+*.yml           text eol=lf
+*.yaml          text eol=lf
+
+# Python: LF everywhere. Consistent diffs, and these files are copied into
+# Linux containers.
+*.py            text eol=lf
+*.toml          text eol=lf
+*.cfg           text eol=lf
+*.ini           text eol=lf
+requirements*.txt text eol=lf
+
+# Documentation
+*.md            text eol=lf
+*.json          text eol=lf
+
+# --------------------------------------------------------------------------
+# Windows-native files -- CRLF is correct here
+# --------------------------------------------------------------------------
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# --------------------------------------------------------------------------
+# Binary -- never touch these
+# --------------------------------------------------------------------------
+*.png           binary
+*.jpg           binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.zip           binary
+*.gz            binary
+*.woff          binary
+*.woff2         binary

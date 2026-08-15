@@ -11,6 +11,7 @@ requirements differ.
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-08-15 | Initial. Stages 0–6 built and deployed; variants 2.1–2.6. Stages 7–8 reserved. |
+| 1.1 | 2026-08-15 | Added 2.6 cross-platform (macOS + Windows); renumbered background work to 2.7. |
 
 **Companion documents:** `PLANNING.md` (what to ask before building),
 `../PHASES.md` (what actually went wrong and how it was fixed).
@@ -48,6 +49,17 @@ brew install --cask docker google-cloud-sdk
 gh auth login          # choose SSH
 gcloud auth login
 ```
+
+```powershell
+# Windows -- install, then do all project work in Git Bash or WSL2,
+# NOT in PowerShell. See variant 2.6.
+winget install Git.Git GitHub.cli Docker.DockerDesktop Google.CloudSDK
+```
+
+**Before the first Windows clone, commit `.gitattributes`** (see 2.6). A shell
+script checked out with CRLF line endings fails inside a Linux container with
+`bash\r: command not found`, naming a file that plainly exists. It is the most
+expensive avoidable failure on a mixed-platform team.
 
 SSH over HTTPS tokens: token scopes cause avoidable failures — notably,
 pushing anything under `.github/workflows/` requires a token with the
@@ -916,7 +928,121 @@ def answer(question: str, assets: list[Asset]) -> str:
 - **Add `/version` fields for the model.** Which model and prompt version is
   running is exactly as important as which commit is running.
 
-## 2.6 Background work
+## 2.6 Cross-platform teams (macOS + Windows)
+
+Read this before the first Windows clone, not after.
+
+### The one that costs an afternoon: line endings
+
+Windows uses CRLF (`\r\n`); macOS, Linux, and every container use LF (`\n`).
+Git on Windows converts LF to CRLF on checkout by default. Harmless for Python
+source. **Catastrophic for anything a shell executes.**
+
+A `.sh` file checked out with CRLF fails inside a Linux container as:
+
+```
+/bin/sh^M: bad interpreter: No such file or directory
+bash\r: command not found
+```
+
+The error names a file that obviously exists, so people go looking for missing
+packages and broken PATHs. The culprit is a stray carriage return.
+
+**Fix it structurally with `.gitattributes`, committed before anyone clones:**
+
+```gitattributes
+* text=auto
+
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+Makefile      text eol=lf
+*.yml         text eol=lf     # `run: |` blocks carry endings into the shell
+*.yaml        text eol=lf
+*.py          text eol=lf
+
+*.bat         text eol=crlf   # Windows-native, CRLF is correct
+*.ps1         text eol=crlf
+```
+
+If the repo already has CRLF committed, normalize once:
+
+```bash
+git add --renormalize .
+git commit -m "chore: normalize line endings via .gitattributes"
+```
+
+### Case-insensitive filesystems
+
+**Both macOS and Windows are case-insensitive by default. Linux CI is not.**
+So `Asset.py` and `asset.py` are the same file on two developers' laptops and
+two different files in CI — producing imports that work locally and fail in
+the pipeline, and vice versa. Agree on `lower_snake_case` filenames and don't
+rely on case to distinguish anything.
+
+Renaming case-only requires two commits, or Git won't notice:
+
+```bash
+git mv Asset.py temp.py && git mv temp.py asset.py
+```
+
+### The executable bit
+
+Windows has no concept of it, so `scripts/setup-gcp.sh` committed from Windows
+arrives without `+x` and CI fails with "permission denied." Set it in the
+index directly rather than relying on the filesystem:
+
+```bash
+git update-index --chmod=+x scripts/setup-gcp.sh
+```
+
+Or invoke scripts as `bash scripts/setup-gcp.sh`, which sidesteps the bit
+entirely — the safer habit on a mixed team.
+
+### Command equivalents
+
+| Task | macOS / Linux | Windows |
+|---|---|---|
+| Shell for the project | Terminal (zsh/bash) | **Git Bash or WSL2** — not PowerShell |
+| Activate venv | `.venv/bin/activate` | `.venv\Scripts\activate` |
+| venv Python | `.venv/bin/python` | `.venv\Scripts\python.exe` |
+| Python launcher | `python3` | `python` or `py -3` |
+| Copy to clipboard | `pbcopy < file` | `clip < file` |
+| In-place sed | `sed -i '' 's/a/b/' f` | `sed -i 's/a/b/' f` (GNU) |
+| `make` | preinstalled | not present — WSL, or run commands directly |
+
+**`sed -i` is a real trap even without Windows.** macOS ships BSD sed, which
+requires an argument to `-i` (`sed -i ''`). GNU sed on Linux rejects that
+form. A command that works on one teammate's machine errors on another's.
+Prefer a small Python script for in-place edits on a mixed team — it behaves
+identically everywhere.
+
+### Docker on Windows
+
+Docker Desktop with the **WSL2 backend**, and keep the repository inside the
+WSL filesystem (`~/projects/...`), not on the Windows drive (`/mnt/c/...`).
+Cross-filesystem builds are dramatically slower and file-watching is
+unreliable.
+
+### What does not vary
+
+CI and production are Linux regardless of what anyone develops on. **The
+container is the equalizer**: once `make build` produces an image, its
+behaviour is identical everywhere. That's an argument for pushing the cohort
+toward running things in the container rather than natively — "works on my
+machine" arguments end at the image boundary.
+
+### Practical recommendations for a mixed cohort
+
+- Commit `.gitattributes` in the first commit. Not the tenth.
+- Standardize on **Git Bash or WSL2** for Windows users so shared commands
+  work verbatim. Publishing two sets of instructions doubles the maintenance
+  and halves the accuracy.
+- Keep the `Makefile`, but document the raw commands underneath it so someone
+  without `make` isn't blocked.
+- Have one Windows user clone from scratch on day one and run the full local
+  flow. Any platform issue surfaces then instead of on demo day.
+
+## 2.7 Background work
 
 If ingestion or scanning is needed: Cloud Run jobs for scheduled batch work,
 or Pub/Sub push subscriptions to a second Cloud Run service for event-driven

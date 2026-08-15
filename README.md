@@ -31,8 +31,8 @@ the chain is broken — the image was not built by CI.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/healthz` | Liveness — process is up. Checks nothing external. |
-| GET | `/readyz` | Readiness — dependencies are usable. |
+| GET | `/health` | Liveness — process is up. Checks nothing external. |
+| GET | `/ready` | Readiness — dependencies are usable. |
 | GET | `/version` | Build provenance. |
 | POST | `/api/v1/assets` | Register an asset. 409 on duplicate hostname. |
 | GET | `/api/v1/assets` | List, filterable by `criticality`, `asset_type`, `tag`. |
@@ -40,6 +40,10 @@ the chain is broken — the image was not built by CI.
 | PATCH | `/api/v1/assets/{id}` | Partial update. |
 | DELETE | `/api/v1/assets/{id}` | Remove. 204 on success. |
 | GET | `/api/v1/stats` | Counts by criticality and type. |
+
+`/healthz` and `/readyz` are registered as aliases for Kubernetes
+compatibility, but **are unreachable on Cloud Run** — its frontend reserves
+paths ending in "z". See the note in `app/main.py`.
 
 Interactive docs at `/docs` when running.
 
