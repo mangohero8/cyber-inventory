@@ -109,6 +109,15 @@ jobs:
             --timeout=30s \
             --quiet
 
+          # Rollback or staged-deployment testing can leave Cloud Run traffic
+          # pinned to an explicit revision. Restore normal production routing
+          # so this deployment and future deployments serve the latest
+          # successfully deployed revision.
+          gcloud run services update-traffic cyber-inventory \
+            --region="${{ vars.GCP_REGION }}" \
+            --to-latest \
+            --quiet
+
           URL="$(gcloud run services describe cyber-inventory \
                   --region="${{ vars.GCP_REGION }}" --format='value(status.url)')"
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
