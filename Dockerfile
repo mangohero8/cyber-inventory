@@ -42,6 +42,13 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # --------------------------------------------------------------------------
 FROM python:3.11-slim-bookworm AS runtime
 
+# Apply currently available Debian security updates to the shipped runtime
+# image. CI scans the final image with Trivy and blocks fixable HIGH/CRITICAL
+# vulnerabilities, so patched OS packages must be present in this stage.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
 # Build args carrying provenance. These are supplied by CI:
 #   docker build --build-arg GIT_COMMIT=$GITHUB_SHA ...
 # They are promoted to ENV below so the running process can read them.

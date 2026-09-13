@@ -97,7 +97,8 @@ jobs:
             --image="${{ steps.tags.outputs.sha_tag }}" \
             --region="${{ vars.GCP_REGION }}" \
             --platform=managed \
-            --allow-unauthenticated \
+            --no-allow-unauthenticated \
+            --invoker-iam-check \
             --service-account="${{ vars.GCP_RUNTIME_SA }}" \
             --set-env-vars="ENVIRONMENT=production" \
             --port=8080 \
@@ -128,10 +129,12 @@ jobs:
         run: |
           set -euo pipefail
           URL="${{ steps.deploy.outputs.url }}"
+          ID_TOKEN="$(gcloud auth print-identity-token --audiences="${URL}")"
+          AUTH_HEADER="Authorization: Bearer ${ID_TOKEN}"
 
           echo "--- waiting for the new revision to serve ---"
           for i in $(seq 1 30); do
-            if curl -sf "${URL}/health" >/dev/null 2>&1; then
+            if curl -sf -H "${AUTH_HEADER}" "${URL}/health" >/dev/null 2>&1; then
               echo "healthy after ${i}s"
               break
             fi
@@ -140,11 +143,11 @@ jobs:
           done
 
           echo "--- readiness ---"
-          curl -sf "${URL}/ready" | tee ready.json
+          curl -sf -H "${AUTH_HEADER}" "${URL}/ready" | tee ready.json
           echo ""
 
           echo "--- version ---"
-          curl -sf "${URL}/version" | tee version.json
+          curl -sf -H "${AUTH_HEADER}" "${URL}/version" | tee version.json
           echo ""
 
           LIVE_COMMIT="$(python3 -c "import json;print(json.load(open('version.json'))['commit'])")"
@@ -164,11 +167,12 @@ jobs:
 
           echo "--- functional check ---"
           curl -sf -X POST "${URL}/api/v1/assets" \
+            -H "${AUTH_HEADER}" \
             -H 'Content-Type: application/json' \
             -d '{"hostname":"smoke-test-01","ip_address":"10.0.0.1","asset_type":"server","owner":"ci","criticality":"low"}' \
             -o /dev/null -w 'create: HTTP %{http_code}\n'
 
-          curl -sf "${URL}/api/v1/stats" | tee stats.json
+          curl -sf -H "${AUTH_HEADER}" "${URL}/api/v1/stats" | tee stats.json
           echo ""
           echo "PRODUCTION VERIFIED: serving ${{ github.sha }}"
 
