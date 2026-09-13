@@ -77,16 +77,16 @@ echo "    both checks confirmed"
 #     New commits invalidate prior approvals. Otherwise "approve early, push
 #     anything after" is an open door, accidental or not.
 #
-# require_code_owner_reviews = true
-#     Makes CODEOWNERS binding rather than advisory.
+# require_code_owner_reviews = false
+#     CODEOWNERS still identifies ownership and automatically requests reviews,
+#     but it is not a separate mandatory gate in this single-owner practice
+#     repository. The required approving review count still enforces peer
+#     approval. In a multi-team repository this should normally be reconsidered.
 #
-# enforce_admins = false
-#     Deliberate, and worth a conversation. `true` means even repository
-#     admins cannot bypass -- philosophically correct, and it will eventually
-#     strand you at 2am with a one-line fix and no way to merge it. `false`
-#     keeps a break-glass path. Whichever you choose, decide it on purpose:
-#     an admin who bypasses silently is a much worse outcome than one who
-#     bypasses visibly.
+# enforce_admins = true
+#     Branch protection applies to repository administrators as well. This
+#     prevents an admin account from silently bypassing the same controls the
+#     engineering cohort is expected to follow.
 #
 # allow_force_pushes / allow_deletions = false
 #     Force-push to a shared branch destroys other people's commits. This is
@@ -108,10 +108,10 @@ gh api -X PUT "repos/${OWNER}/${REPO}/branches/${BRANCH}/protection" \
     "strict": true,
     "contexts": ["${CHECK_QUALITY}", "${CHECK_CONTAINER}"]
   },
-  "enforce_admins": false,
+  "enforce_admins": true,
   "required_pull_request_reviews": {
     "dismiss_stale_reviews": true,
-    "require_code_owner_reviews": true,
+    "require_code_owner_reviews": false,
     "required_approving_review_count": 1
   },
   "restrictions": null,
