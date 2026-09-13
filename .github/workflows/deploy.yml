@@ -125,11 +125,20 @@ jobs:
       # This closes the loop the whole project is built around:
       #   commit -> build -> deploy -> PRODUCTION, verified end to end.
       # ------------------------------------------------------------------
+      - name: Authenticate for Cloud Run smoke test
+        id: smoke-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ steps.deploy.outputs.url }}
+
       - name: Smoke test the live service
         run: |
           set -euo pipefail
           URL="${{ steps.deploy.outputs.url }}"
-          ID_TOKEN="$(gcloud auth print-identity-token --audiences="${URL}")"
+          ID_TOKEN="${{ steps.smoke-auth.outputs.id_token }}"
           AUTH_HEADER="Authorization: Bearer ${ID_TOKEN}"
 
           echo "--- waiting for the new revision to serve ---"
