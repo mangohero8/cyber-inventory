@@ -1,3 +1,5 @@
+unused_variable_for_ci_test = 123
+
 """Cyber inventory service.
 
 A small FastAPI service that tracks assets. The interesting parts for the
