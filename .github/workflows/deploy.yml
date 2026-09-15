@@ -158,7 +158,7 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
           token_format: id_token
-          id_token_audience: ${{ steps.deploy.outputs.candidate_url }}
+          id_token_audience: ${{ steps.deploy.outputs.url }}
 
       - name: Validate candidate before promotion
         run: |
@@ -170,13 +170,26 @@ jobs:
 
           echo "--- candidate health ---"
           for i in $(seq 1 30); do
-            if curl -sf -H "${AUTH_HEADER}" "${URL}/health" >/dev/null 2>&1; then
+            HTTP_CODE="$(curl -sS \
+              -o candidate-health.json \
+              -w '%{http_code}' \
+              -H "${AUTH_HEADER}" \
+              "${URL}/health" || true)"
+
+            echo "candidate health attempt ${i}: HTTP ${HTTP_CODE}"
+
+            if [ "${HTTP_CODE}" = "200" ]; then
+              cat candidate-health.json
+              echo ""
               echo "candidate healthy after attempt ${i}"
               break
             fi
 
             if [ "$i" -eq 30 ]; then
-              echo "::error::candidate never became healthy"
+              echo "::error::candidate never became healthy; last HTTP status ${HTTP_CODE}"
+              if [ -s candidate-health.json ]; then
+                cat candidate-health.json
+              fi
               exit 1
             fi
 
