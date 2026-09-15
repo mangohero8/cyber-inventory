@@ -89,10 +89,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Deploy to Cloud Run
+      # Deploy the candidate without sending production traffic to it.
+      # The existing production revision continues serving 100% until every
+      # candidate validation below succeeds.
+      - name: Deploy candidate to Cloud Run
         id: deploy
         run: |
           set -euo pipefail
+
           gcloud run deploy cyber-inventory \
             --image="${{ steps.tags.outputs.sha_tag }}" \
             --region="${{ vars.GCP_REGION }}" \
@@ -107,35 +111,130 @@ jobs:
             --min-instances=0 \
             --max-instances=3 \
             --timeout=30s \
+            --no-traffic \
             --quiet
 
-          # Rollback or staged-deployment testing can leave Cloud Run traffic
-          # pinned to an explicit revision. Restore normal production routing
-          # so this deployment and future deployments serve the latest
-          # successfully deployed revision.
+          REVISION="$(gcloud run services describe cyber-inventory \
+            --region="${{ vars.GCP_REGION }}" \
+            --format='value(status.latestCreatedRevisionName)')"
+
+          if [ -z "${REVISION}" ]; then
+            echo "::error::could not determine candidate revision"
+            exit 1
+          fi
+
+          TAG="candidate-${GITHUB_RUN_ID}"
+
           gcloud run services update-traffic cyber-inventory \
             --region="${{ vars.GCP_REGION }}" \
-            --to-latest \
+            --update-tags="${TAG}=${REVISION}" \
             --quiet
 
-          URL="$(gcloud run services describe cyber-inventory \
-                  --region="${{ vars.GCP_REGION }}" --format='value(status.url)')"
-          echo "url=${URL}" >> "$GITHUB_OUTPUT"
-          echo "deployed to ${URL}"
+          BASE_URL="$(gcloud run services describe cyber-inventory \
+            --region="${{ vars.GCP_REGION }}" \
+            --format='value(status.url)')"
 
-      # ------------------------------------------------------------------
-      # THE PRODUCTION SMOKE TEST.
-      #
-      # "The deploy command exited 0" is not the same as "the new version is
-      # serving traffic". This asks the live service what commit it is and
-      # fails the workflow if the answer is anything other than the commit we
-      # just deployed.
-      #
-      # This closes the loop the whole project is built around:
-      #   commit -> build -> deploy -> PRODUCTION, verified end to end.
-      # ------------------------------------------------------------------
-      - name: Authenticate for Cloud Run smoke test
-        id: smoke-auth
+          # Cloud Run tagged URLs use:
+          # https://TAG---SERVICE_HASH.a.run.app
+          HOST="${BASE_URL#https://}"
+          CANDIDATE_URL="https://${TAG}---${HOST}"
+
+          echo "revision=${REVISION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "url=${BASE_URL}" >> "$GITHUB_OUTPUT"
+          echo "candidate_url=${CANDIDATE_URL}" >> "$GITHUB_OUTPUT"
+
+          echo "candidate revision: ${REVISION}"
+          echo "candidate URL:      ${CANDIDATE_URL}"
+          echo "production URL:     ${BASE_URL}"
+
+      # WIF access-token authentication used for deployment is deliberately
+      # separate from the audience-specific ID token used to invoke the
+      # private candidate revision.
+      - name: Authenticate for candidate smoke test
+        id: candidate-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ steps.deploy.outputs.candidate_url }}
+
+      - name: Validate candidate before promotion
+        run: |
+          set -euo pipefail
+
+          URL="${{ steps.deploy.outputs.candidate_url }}"
+          ID_TOKEN="${{ steps.candidate-auth.outputs.id_token }}"
+          AUTH_HEADER="Authorization: Bearer ${ID_TOKEN}"
+
+          echo "--- candidate health ---"
+          for i in $(seq 1 30); do
+            if curl -sf -H "${AUTH_HEADER}" "${URL}/health" >/dev/null 2>&1; then
+              echo "candidate healthy after attempt ${i}"
+              break
+            fi
+
+            if [ "$i" -eq 30 ]; then
+              echo "::error::candidate never became healthy"
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          echo "--- candidate readiness ---"
+          curl -sf -H "${AUTH_HEADER}" "${URL}/ready" | tee candidate-ready.json
+          echo ""
+
+          echo "--- candidate provenance ---"
+          curl -sf -H "${AUTH_HEADER}" "${URL}/version" | tee candidate-version.json
+          echo ""
+
+          LIVE_COMMIT="$(python3 -c "import json; print(json.load(open('candidate-version.json'))['commit'])")"
+
+          echo "candidate reports: ${LIVE_COMMIT}"
+          echo "expected:          ${{ github.sha }}"
+
+          if [ "${LIVE_COMMIT}" = "unknown" ]; then
+            echo "::error::candidate reports no build provenance"
+            exit 1
+          fi
+
+          if [ "${LIVE_COMMIT}" != "${{ github.sha }}" ]; then
+            echo "::error::candidate provenance mismatch: ${LIVE_COMMIT}"
+            exit 1
+          fi
+
+          echo "--- candidate functional check ---"
+
+          SMOKE_HOST="smoke-${GITHUB_RUN_ID}"
+
+          curl -sf -X POST "${URL}/api/v1/assets" \
+            -H "${AUTH_HEADER}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"hostname\":\"${SMOKE_HOST}\",\"ip_address\":\"10.0.0.1\",\"asset_type\":\"server\",\"owner\":\"ci\",\"criticality\":\"low\"}" \
+            -o /dev/null
+
+          curl -sf -H "${AUTH_HEADER}" "${URL}/api/v1/stats" >/dev/null
+
+          echo "CANDIDATE VERIFIED: ${{ steps.deploy.outputs.revision }}"
+
+      # Promotion occurs only after the candidate has passed startup,
+      # readiness, provenance, and functional validation.
+      - name: Promote candidate to production
+        run: |
+          set -euo pipefail
+
+          gcloud run services update-traffic cyber-inventory \
+            --region="${{ vars.GCP_REGION }}" \
+            --to-revisions="${{ steps.deploy.outputs.revision }}=100" \
+            --quiet
+
+          echo "PROMOTED: ${{ steps.deploy.outputs.revision }}"
+
+      - name: Authenticate for production verification
+        id: production-auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -143,56 +242,42 @@ jobs:
           token_format: id_token
           id_token_audience: ${{ steps.deploy.outputs.url }}
 
-      - name: Smoke test the live service
+      - name: Verify production after promotion
         run: |
           set -euo pipefail
+
           URL="${{ steps.deploy.outputs.url }}"
-          ID_TOKEN="${{ steps.smoke-auth.outputs.id_token }}"
+          ID_TOKEN="${{ steps.production-auth.outputs.id_token }}"
           AUTH_HEADER="Authorization: Bearer ${ID_TOKEN}"
 
-          echo "--- waiting for the new revision to serve ---"
-          for i in $(seq 1 30); do
-            if curl -sf -H "${AUTH_HEADER}" "${URL}/health" >/dev/null 2>&1; then
-              echo "healthy after ${i}s"
-              break
-            fi
-            [ "$i" -eq 30 ] && { echo "::error::service never became healthy"; exit 1; }
-            sleep 2
-          done
+          echo "--- production health ---"
+          curl -sf -H "${AUTH_HEADER}" "${URL}/health" >/dev/null
 
-          echo "--- readiness ---"
-          curl -sf -H "${AUTH_HEADER}" "${URL}/ready" | tee ready.json
+          echo "--- production readiness ---"
+          curl -sf -H "${AUTH_HEADER}" "${URL}/ready" >/dev/null
+
+          echo "--- production provenance ---"
+          curl -sf -H "${AUTH_HEADER}" "${URL}/version" | tee production-version.json
           echo ""
 
-          echo "--- version ---"
-          curl -sf -H "${AUTH_HEADER}" "${URL}/version" | tee version.json
-          echo ""
-
-          LIVE_COMMIT="$(python3 -c "import json;print(json.load(open('version.json'))['commit'])")"
-          echo "live in production: ${LIVE_COMMIT}"
-          echo "expected:           ${{ github.sha }}"
-
-          if [ "${LIVE_COMMIT}" = "unknown" ]; then
-            echo "::error::production reports no build provenance"
-            exit 1
-          fi
+          LIVE_COMMIT="$(python3 -c "import json; print(json.load(open('production-version.json'))['commit'])")"
 
           if [ "${LIVE_COMMIT}" != "${{ github.sha }}" ]; then
             echo "::error::production is serving ${LIVE_COMMIT}, expected ${{ github.sha }}"
-            echo "::error::the deploy reported success but old code is still serving"
             exit 1
           fi
 
-          echo "--- functional check ---"
-          curl -sf -X POST "${URL}/api/v1/assets" \
-            -H "${AUTH_HEADER}" \
-            -H 'Content-Type: application/json' \
-            -d '{"hostname":"smoke-test-01","ip_address":"10.0.0.1","asset_type":"server","owner":"ci","criticality":"low"}' \
-            -o /dev/null -w 'create: HTTP %{http_code}\n'
-
-          curl -sf -H "${AUTH_HEADER}" "${URL}/api/v1/stats" | tee stats.json
-          echo ""
           echo "PRODUCTION VERIFIED: serving ${{ github.sha }}"
+
+      - name: Remove candidate tag
+        if: always() && steps.deploy.outputs.tag != ''
+        run: |
+          set -euo pipefail
+
+          gcloud run services update-traffic cyber-inventory \
+            --region="${{ vars.GCP_REGION }}" \
+            --remove-tags="${{ steps.deploy.outputs.tag }}" \
+            --quiet
 
       - name: Summarize
         if: always()
