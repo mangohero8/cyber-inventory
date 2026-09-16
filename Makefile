@@ -4,7 +4,8 @@
 # the *same* commands. When `make test` is what runs locally and what runs in
 # the pipeline, "passes on my machine but fails in CI" mostly disappears.
 
-.PHONY: help install test lint fmt run build run-container smoke clean
+.PHONY: help install test test-integration test-integration-docker \
+	test-persistence test-cloudrun lint fmt run build run-container smoke clean
 
 # Provenance, computed the same way CI computes it.
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -22,6 +23,21 @@ install:  ## Create the venv and install dev dependencies
 
 test:  ## Run the test suite with coverage
 	.venv/bin/pytest --cov=app --cov-report=term-missing
+
+# The targets below need a running service, so they are deliberately NOT part
+# of `make test`: CI must stay hermetic and fast.
+
+test-integration:  ## HTTP tests against a real uvicorn process
+	bash scripts/tests/local-integration.sh
+
+test-integration-docker:  ## HTTP tests against the shipped container image
+	bash scripts/tests/local-integration.sh --docker
+
+test-persistence:  ## DESTRUCTIVE, local: restart an instance, record data loss
+	bash scripts/tests/destructive/persistence-local.sh --mode process --confirm-restart
+
+test-cloudrun:  ## Functional checks against the deployed private service
+	bash scripts/tests/cloudrun-functional.sh
 
 lint:  ## Check code style and security rules
 	.venv/bin/ruff check .
